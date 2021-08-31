@@ -92,6 +92,8 @@
     <ClInclude Include="CustomButton.h" />
     <ClInclude Include="CustomDialog.h" />
     <ClInclude Include="CustomEdit.h" />
+    <ClInclude Include="CustomHeader.h" />
+    <ClInclude Include="CustomRebar.h" />
     <ClInclude Include="CustomStatusBar.h" />
     <ClInclude Include="DialogHelper.h" />
     <ClInclude Include="IconHelper.h" />
@@ -113,6 +115,7 @@
     <ClCompile Include="IconHelper.cpp" />
     <ClCompile Include="IniFile.cpp" />
     <ClCompile Include="ListViewhelper.cpp" />
+    <ClCompile Include="OwnerDrawnMenu.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>

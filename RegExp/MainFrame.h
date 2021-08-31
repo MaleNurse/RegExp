@@ -12,6 +12,7 @@
 #include "OwnerDrawnMenu.h"
 #include "Theme.h"
 #include "LocationManager.h"
+#include "KeysHandlesDlg.h"
 
 enum class NodeType {
 	None = 0,
@@ -33,6 +34,7 @@ class CMainFrame :
 	public CAutoUpdateUI<CMainFrame>,
 	public CVirtualListView<CMainFrame>,
 	public CCustomDraw<CMainFrame>,
+	public COwnerDraw<CMainFrame>,
 	public CDwmImpl<CMainFrame>,
 	public IMainFrame,
 	public CMessageFilter,
@@ -40,15 +42,15 @@ class CMainFrame :
 public:
 	DECLARE_FRAME_WND_CLASS(L"RegExpWndClass", IDR_MAINFRAME)
 
-	CMainFrame() : m_FindDlg(this), m_AddressBar(this, 2), m_Menu(this) {}
+	CMainFrame() : m_FindDlg(this), m_HandlesDlg(this), m_AddressBar(this, 2), m_Menu(this) {}
 
 	const UINT WM_BUILD_TREE = WM_APP + 11;
 	const UINT WM_FIND_UPDATE = WM_APP + 12;
 	const UINT WM_RUN = WM_APP + 13;
 	const UINT TreeId = 123;
 
-	virtual BOOL PreTranslateMessage(MSG* pMsg);
-	virtual BOOL OnIdle();
+	BOOL PreTranslateMessage(MSG* pMsg) override;
+	BOOL OnIdle() override;
 
 	DWORD OnPrePaint(int, LPNMCUSTOMDRAW cd);
 	DWORD OnItemPrePaint(int, LPNMCUSTOMDRAW cd);
@@ -56,6 +58,7 @@ public:
 
 	void RunOnUiThread(std::function<void()> f);
 	void SetStartKey(const CString& key);
+	void SetStatusText(PCWSTR text);
 
 	// IMainFrame
 	HWND GetHwnd() const override;
@@ -64,9 +67,10 @@ public:
 	void OnFindStart();
 	void OnFindEnd(bool cancelled);
 	bool GoToItem(PCWSTR path, PCWSTR name, PCWSTR data) override;
-	BOOL TrackPopupMenu(HMENU hMenu, DWORD flags, int x, int y) override;
+	BOOL TrackPopupMenu(HMENU hMenu, DWORD flags, int x, int y, HWND hWnd = nullptr) override;
 	CString GetCurrentKeyPath() override;
-	void DisplayError(PCWSTR msg, DWORD error = ::GetLastError()) const;
+	void DisplayError(PCWSTR msg, HWND hWnd = nullptr, DWORD error = ::GetLastError()) const override;
+	bool AddMenu(HMENU hMenu) override;
 
 	CString GetColumnText(HWND, int row, int col) const;
 
@@ -75,6 +79,8 @@ public:
 	bool IsSortable(HWND, int col) const;
 	BOOL OnRightClickList(HWND, int row, int col, const POINT&);
 	BOOL OnDoubleClickList(HWND, int row, int col, const POINT& pt);
+
+	void DrawItem(LPDRAWITEMSTRUCT dis);
 
 	enum {
 		ID_LOCATION_FIRST = 1500
@@ -109,6 +115,7 @@ public:
 		COMMAND_ID_HANDLER(ID_VIEW_SHOWKEYSINLIST, OnShowKeysInList)
 		COMMAND_ID_HANDLER(ID_NEW_KEY, OnNewKey)
 		COMMAND_RANGE_HANDLER(ID_NEW_DWORDVALUE, ID_NEW_BINARYVALUE, OnNewValue)
+		COMMAND_ID_HANDLER(ID_TOOLS_SCANKEYHANDLES, OnShowKeysHandles)
 		COMMAND_ID_HANDLER(ID_EDIT_COPY, OnEditCopy)
 		COMMAND_ID_HANDLER(ID_EDIT_CUT, OnEditCut)
 		COMMAND_ID_HANDLER(ID_EDIT_PASTE, OnEditPaste)
@@ -143,11 +150,12 @@ public:
 		COMMAND_ID_HANDLER(ID_OPTIONS_FONT, OnOptionsFont)
 		MESSAGE_HANDLER(WM_SHOWWINDOW, OnShowWindow)
 		COMMAND_ID_HANDLER(ID_OPTIONS_RESTOREDEFAULTFONT, OnRestoreDefaultFont)
+		CHAIN_MSG_MAP_MEMBER(m_Menu)
 		CHAIN_MSG_MAP(CAutoUpdateUI<CMainFrame>)
 		CHAIN_MSG_MAP(CCustomDraw<CMainFrame>)
+		CHAIN_MSG_MAP(COwnerDraw<CMainFrame>)
 		CHAIN_MSG_MAP(CVirtualListView<CMainFrame>)
 		CHAIN_MSG_MAP(CFrameWindowImpl<CMainFrame>)
-		CHAIN_MSG_MAP_MEMBER(m_Menu)
 		REFLECT_NOTIFICATIONS_EX()
 	ALT_MSG_MAP(2)
 		MESSAGE_HANDLER(WM_KEYDOWN, OnEditKeyDown)
@@ -196,7 +204,7 @@ private:
 	LRESULT OnCreate(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/, BOOL& /*bHandled*/);
 	LRESULT OnDestroy(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/, BOOL& /*bHandled*/);
 	LRESULT OnTimer(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/, BOOL& /*bHandled*/);
-	LRESULT OnNcPaint(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/, BOOL& /*bHandled*/);
+	LRESULT OnEditPaint(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/, BOOL& /*bHandled*/);
 	LRESULT OnShowWindow(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/, BOOL& /*bHandled*/);
 	LRESULT OnMenuSelect(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/, BOOL& /*bHandled*/);
 	LRESULT OnFindUpdate(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/, BOOL& /*bHandled*/);
@@ -257,6 +265,7 @@ private:
 	LRESULT OnDisconnectRemote(WORD /*wNotifyCode*/, WORD /*wID*/, HWND /*hWndCtl*/, BOOL& /*bHandled*/);
 	LRESULT OnOptionsFont(WORD /*wNotifyCode*/, WORD /*wID*/, HWND /*hWndCtl*/, BOOL& /*bHandled*/);
 	LRESULT OnRestoreDefaultFont(WORD /*wNotifyCode*/, WORD /*wID*/, HWND /*hWndCtl*/, BOOL& /*bHandled*/);
+	LRESULT OnShowKeysHandles(WORD /*wNotifyCode*/, WORD /*wID*/, HWND /*hWndCtl*/, BOOL& /*bHandled*/);
 
 	void InitCommandBar();
 	void InitToolBar(CToolBarCtrl& tb, int size = 24);
@@ -276,14 +285,14 @@ private:
 	CString GetValueDetails(const RegistryItem& item) const;
 	bool RefreshItem(HTREEITEM hItem);
 	void DisplayBackupRestorePrivilegeError();
-	static CString GetErrorText(DWORD error);
 	int GetKeyImage(const RegistryItem& item) const;
 	INT_PTR ShowValueProperties(RegistryItem& item, int index);
 	void SetDarkMode(bool dark);
-	HTREEITEM GotoKey(const CString& path);
+	HTREEITEM GotoKey(const CString& path, bool knownToExist = false);
 	void ShowBand(int index, bool show);
 	void InitDarkTheme();
 	void InitLocations();
+	HTREEITEM BuildKeyPath(const CString& path, bool accessible);
 
 	AppCommandCallback<DeleteKeyCommand> GetDeleteKeyCommandCallback();
 
@@ -314,6 +323,8 @@ private:
 	CComObject<CEnumStrings>* m_AutoCompleteStrings{ nullptr };
 	Theme m_DarkTheme, m_DefaultTheme{ true };
 	CFont m_Font;
+	CKeysHandlesDlg m_HandlesDlg;
+	CString m_StatusText;
 	bool m_ReadOnly{ true };
 	bool m_UpdateNoDelay{ false };
 };

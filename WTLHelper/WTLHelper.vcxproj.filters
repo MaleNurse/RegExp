@@ -75,6 +75,12 @@
     <ClInclude Include="CustomDialog.h">
       <Filter>Controls</Filter>
     </ClInclude>
+    <ClInclude Include="CustomHeader.h">
+      <Filter>Controls</Filter>
+    </ClInclude>
+    <ClInclude Include="CustomRebar.h">
+      <Filter>Controls</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="WTLHelper.cpp">
@@ -112,6 +118,9 @@
     </ClCompile>
     <ClCompile Include="Theme.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="OwnerDrawnMenu.cpp">
+      <Filter>Controls</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

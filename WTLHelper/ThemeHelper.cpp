@@ -7,6 +7,9 @@
 #include "CustomStatusBar.h"
 #include "CustomButton.h"
 #include "CustomDialog.h"
+#include "CustomHeader.h"
+#include "CustomRebar.h"
+#include "OwnerDrawnMenu.h"
 #include <unordered_map>
 
 const Theme* CurrentTheme;
@@ -65,31 +68,48 @@ void HandleCreateWindow(CWPRETSTRUCT* cs) {
 		if ((lpcs->style & (WS_THICKFRAME | WS_CAPTION | WS_POPUP | WS_DLGFRAME)) == 0)
 			::SetWindowTheme(cs->hwnd, L" ", L"");
 	}
-	if (name.CompareNoCase(L"EDIT") == 0 || name.CompareNoCase(L"ATL:EDIT") == 0) {
-		auto win = new CCustomEdit;
-		ATLVERIFY(win->SubclassWindow(cs->hwnd));
-	}
+	//if (name.CompareNoCase(L"EDIT") == 0 || name.CompareNoCase(L"ATL:EDIT") == 0) {
+	//	auto win = new CCustomEdit;
+	//	ATLVERIFY(win->SubclassWindow(cs->hwnd));
+	//}
 	if (name.CompareNoCase(WC_LISTVIEW) == 0) {
 		::SetWindowTheme(cs->hwnd, nullptr, nullptr);
 	}
 	else if (name.CompareNoCase(WC_TREEVIEW) == 0) {
 		::SetWindowTheme(cs->hwnd, nullptr, nullptr);
 	}
+	else if (name.CompareNoCase(REBARCLASSNAME) == 0) {
+		::SetWindowTheme(cs->hwnd, nullptr, nullptr);
+		auto win = new CCustomRebar;
+		win->SubclassWindow(cs->hwnd);
+	}
+	else if (name.CompareNoCase(TOOLBARCLASSNAME) == 0) {
+		::SetWindowTheme(cs->hwnd, nullptr, nullptr);
+	}
 	else if (name.CompareNoCase(WC_HEADER) == 0) {
-		::SetWindowTheme(cs->hwnd, L" ", L"");
+		::SetWindowTheme(cs->hwnd, nullptr, nullptr);
+		auto win = new CCustomHeaderParent;
+		win->SubclassWindow(lpcs->hwndParent);
+		win->Init(cs->hwnd);
 	}
 	else if (name.CompareNoCase(L"#32770") == 0) {		// dialog
 		auto win = new CCustomDialog;
 		ATLVERIFY(win->SubclassWindow(cs->hwnd));
 	}
 	else if (name.CompareNoCase(STATUSCLASSNAME) == 0) {
-		::SetWindowTheme(cs->hwnd, L" ", L"");
+		::SetWindowTheme(cs->hwnd, nullptr, nullptr);
 		auto win = new CCustomStatusBar;
 		ATLVERIFY(win->SubclassWindow(cs->hwnd));
 	}
-	else if (name.CompareNoCase(L"ScrollBar") == 0 && (lpcs->style & (SBS_SIZEBOX | SBS_SIZEGRIP))) {
-		//auto win = new CSizeGrip;
-		//ATLVERIFY(win->SubclassWindow(cs->hwnd));
+	else if (name.CompareNoCase(L"ScrollBar") == 0) {
+		if (lpcs->style & (SBS_SIZEBOX | SBS_SIZEGRIP)) {
+			auto win = new CSizeGrip;
+			ATLVERIFY(win->SubclassWindow(cs->hwnd));
+		}
+		else {
+			//auto win = new CCustomScrollBar;
+			//win->SubclassWindow(cs->hwnd);
+		}
 	}
 	else if (name.CompareNoCase(L"BUTTON") == 0) {
 		auto type = lpcs->style & BS_TYPEMASK;
@@ -98,12 +118,9 @@ void HandleCreateWindow(CWPRETSTRUCT* cs) {
 			ATLVERIFY(win->SubclassWindow(::GetParent(cs->hwnd)));
 		}
 	}
-
 }
 
 LRESULT CALLBACK CallWndProc(int action, WPARAM wp, LPARAM lp) {
-	auto def = ThemeHelper::GetCurrentTheme() == nullptr || ThemeHelper::GetCurrentTheme()->IsDefault();
-
 	if (SuspendCount == 0 && action == HC_ACTION) {
 		auto cs = reinterpret_cast<CWPRETSTRUCT*>(lp);
 
@@ -160,6 +177,22 @@ const Theme* ThemeHelper::GetCurrentTheme() {
 	return CurrentTheme;
 }
 
+bool ThemeHelper::IsDefault() {
+	return GetCurrentTheme() == nullptr || GetCurrentTheme()->IsDefault();
+}
+
 void ThemeHelper::SetCurrentTheme(const Theme& theme) {
 	CurrentTheme = &theme;
+}
+
+void ThemeHelper::UpdateMenuColors(COwnerDrawnMenuBase& menu, bool dark) {
+	//
+	// customize menu colors
+	//
+	auto theme = GetCurrentTheme();
+	menu.SetBackColor(theme->Menu.BackColor);
+	menu.SetTextColor(theme->Menu.TextColor);
+	menu.SetSelectionTextColor(dark ? RGB(240, 240, 240) : RGB(248, 248, 248));
+	menu.SetSelectionBackColor(dark ? RGB(0, 64, 240) : RGB(0, 48, 160));
+	menu.SetSeparatorColor(dark ? RGB(160, 160, 160) : RGB(64, 64, 64));
 }

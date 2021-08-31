@@ -28,9 +28,10 @@
 #include "ConnectRegistryDlg.h"
 #include "Helpers.h"
 #include "RegExportImport.h"
+#include "ImageIconCache.h"
 
 BOOL CMainFrame::PreTranslateMessage(MSG* pMsg) {
-	if (m_FindDlg.IsWindowVisible() && m_FindDlg.IsDialogMessage(pMsg))
+	if (m_FindDlg.IsWindowVisible() && ::GetActiveWindow() == m_FindDlg && m_FindDlg.IsDialogMessage(pMsg))
 		return TRUE;
 
 	auto hFocus = ::GetFocus();
@@ -50,11 +51,14 @@ BOOL CMainFrame::OnIdle() {
 }
 
 DWORD CMainFrame::OnPrePaint(int, LPNMCUSTOMDRAW cd) {
-	return cd->hdr.hwndFrom == m_List ? CDRF_NOTIFYITEMDRAW : CDRF_DODEFAULT;
+	if (cd->hdr.hwndFrom == m_List)
+		return CDRF_NOTIFYITEMDRAW;
+	SetMsgHandled(FALSE);
+	return CDRF_DODEFAULT;
 }
 
 DWORD CMainFrame::OnItemPrePaint(int, LPNMCUSTOMDRAW cd) {
-	return CDRF_NOTIFYSUBITEMDRAW;
+	return cd->hdr.hwndFrom == m_List ? CDRF_NOTIFYSUBITEMDRAW : CDRF_DODEFAULT;
 }
 
 DWORD CMainFrame::OnSubItemPrePaint(int, LPNMCUSTOMDRAW cd) {
@@ -90,6 +94,10 @@ void CMainFrame::RunOnUiThread(std::function<void()> f) {
 
 void CMainFrame::SetStartKey(const CString& key) {
 	m_StartKey = key;
+}
+
+void CMainFrame::SetStatusText(PCWSTR text) {
+	m_StatusBar.SetText((int)StatusPane::Key, m_StatusText = text, SBT_NOBORDERS | (ThemeHelper::IsDefault() ? 0 : SBT_OWNERDRAW));
 }
 
 HWND CMainFrame::GetHwnd() const {
@@ -152,6 +160,7 @@ bool CMainFrame::GoToItem(PCWSTR path, PCWSTR name, PCWSTR data) {
 	if (!hItem)
 		return false;
 
+	SetActiveWindow();
 	m_UpdateNoDelay = true;
 	m_Tree.SelectItem(hItem);
 	UpdateList();
@@ -169,8 +178,8 @@ bool CMainFrame::GoToItem(PCWSTR path, PCWSTR name, PCWSTR data) {
 	return true;
 }
 
-BOOL CMainFrame::TrackPopupMenu(HMENU hMenu, DWORD flags, int x, int y) {
-	return m_Menu.TrackPopupMenu(hMenu, flags, x, y);
+BOOL CMainFrame::TrackPopupMenu(HMENU hMenu, DWORD flags, int x, int y, HWND hWnd) {
+	return m_Menu.TrackPopupMenu(hMenu, flags, x, y, hWnd);
 }
 
 CString CMainFrame::GetCurrentKeyPath() {
@@ -302,6 +311,17 @@ BOOL CMainFrame::OnDoubleClickList(HWND, int row, int col, const POINT& pt) {
 	return FALSE;
 }
 
+void CMainFrame::DrawItem(LPDRAWITEMSTRUCT dis) {
+	if (dis->hwndItem != m_StatusBar) {
+		SetMsgHandled(FALSE);
+		return;
+	}
+
+	::SetTextColor(dis->hDC, ThemeHelper::GetCurrentTheme()->TextColor);
+	::SetBkMode(dis->hDC, TRANSPARENT);
+	::DrawText(dis->hDC, m_StatusText, -1, &dis->rcItem, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+}
+
 LRESULT CMainFrame::OnCreate(UINT, WPARAM, LPARAM, BOOL&) {
 	::RegDeleteTree(HKEY_CURRENT_USER, DeletedPathBackup.Left(DeletedPathBackup.GetLength() - 1));
 
@@ -346,16 +366,13 @@ LRESULT CMainFrame::OnCreate(UINT, WPARAM, LPARAM, BOOL&) {
 		SetWindowText(text);
 	}
 
+	m_Menu.SetCheckIcon(AtlLoadIconImage(IDI_CHECK, 0, 16, 16));
 	InitCommandBar();
 	UIAddMenu(menu);
+	UIAddMenu(IDR_CONTEXT);
 
 	CToolBarCtrl tb;
 	tb.Create(m_hWnd, nullptr, nullptr, ATL_SIMPLE_TOOLBAR_PANE_STYLE, 0, ATL_IDW_TOOLBAR);
-	COLORSCHEME cs = { sizeof(cs) };
-	cs.clrBtnHighlight = RGB(200, 200, 200);
-	cs.clrBtnShadow = RGB(0, 0, 255);
-	tb.SetColorScheme(&cs);
-
 	InitToolBar(tb, 24);
 	UIAddToolBar(tb);
 
@@ -368,7 +385,7 @@ LRESULT CMainFrame::OnCreate(UINT, WPARAM, LPARAM, BOOL&) {
 		m_AutoCompleteStrings->CreateInstance(&m_AutoCompleteStrings);
 		CRect r(0, 0, 400, 20);
 		CEdit edit;
-		auto hEdit = edit.Create(m_hWnd, &r, nullptr, WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_WANTRETURN | WS_CLIPSIBLINGS);
+		auto hEdit = edit.Create(m_hWnd, &r, nullptr, WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_WANTRETURN | WS_CLIPSIBLINGS, WS_EX_WINDOWEDGE);
 		hr = spAC->Init(hEdit, m_AutoCompleteStrings->GetUnknown(), nullptr, nullptr);
 		if (SUCCEEDED(hr)) {
 			spAC->Enable(TRUE);
@@ -451,8 +468,6 @@ LRESULT CMainFrame::OnCreate(UINT, WPARAM, LPARAM, BOOL&) {
 	UISetCheck(ID_VIEW_STATUSBAR, m_Settings.ViewStatusBar());
 
 	SetDarkMode(m_Settings.DarkMode());
-	if (m_Settings.AlwaysOnTop())
-		SetWindowPos(HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 
 	auto lf = m_Settings.Font();
 	if (lf.lfHeight) {
@@ -471,6 +486,10 @@ LRESULT CMainFrame::OnCreate(UINT, WPARAM, LPARAM, BOOL&) {
 }
 
 LRESULT CMainFrame::OnDestroy(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/, BOOL& bHandled) {
+	if (m_HandlesDlg)
+		m_HandlesDlg.DestroyWindow();
+	ImageIconCache::Get().Destroy();
+
 	WINDOWPLACEMENT wp;
 	wp.length = sizeof(wp);
 	if (GetWindowPlacement(&wp)) {
@@ -501,6 +520,14 @@ LRESULT CMainFrame::OnTimer(UINT, WPARAM id, LPARAM, BOOL&) {
 	return 0;
 }
 
+LRESULT CMainFrame::OnEditPaint(UINT, WPARAM wp, LPARAM, BOOL& handled) {
+	CDCHandle dc((HDC)wp);
+	CRect rc;
+	GetClientRect(&rc);
+	dc.FillSolidRect(&rc, 255);
+	return 1;
+}
+
 LRESULT CMainFrame::OnShowWindow(UINT, WPARAM show, LPARAM, BOOL&) {
 	static bool shown = false;
 	if (show && !shown) {
@@ -510,6 +537,8 @@ LRESULT CMainFrame::OnShowWindow(UINT, WPARAM show, LPARAM, BOOL&) {
 			SetWindowPlacement(&wp);
 			UpdateLayout();
 		}
+		if (m_Settings.AlwaysOnTop())
+			SetWindowPos(HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 	}
 	return 0;
 }
@@ -688,8 +717,8 @@ LRESULT CMainFrame::OnTreeEndEdit(int, LPNMHDR hdr, BOOL&) {
 			auto hParent = m_Tree.GetParentItem(hItem);
 			auto cmd = std::make_shared<CreateKeyCommand>(GetFullNodePath(hParent), item.pszText);
 			if (!m_CmdMgr.AddCommand(cmd)) {
-				DisplayError(L"Failed to create key");
 				m_Tree.DeleteItem(hItem);
+				DisplayError(L"Failed to create key");
 				return FALSE;
 			}
 			auto cb = [this](auto& cmd, bool execute) {
@@ -779,6 +808,8 @@ LRESULT CMainFrame::OnTreeKeyDown(int, LPNMHDR hdr, BOOL&) {
 	switch (tv->wVKey) {
 		case VK_TAB:
 			m_List.SetFocus();
+			if (m_List.GetSelectedCount() == 0)
+				m_List.SetItemState(0, LVIS_SELECTED, LVIS_SELECTED);
 			return TRUE;
 
 		case VK_APPS:
@@ -1016,29 +1047,32 @@ LRESULT CMainFrame::OnFindAll(WORD, WORD, HWND, BOOL&) {
 }
 
 LRESULT CMainFrame::OnKeyPermissions(WORD, WORD, HWND, BOOL&) {
-		auto path = GetFullNodePath(m_Tree.GetSelectedItem());
-	CRegKey key;
+	auto path = GetFullNodePath(m_Tree.GetSelectedItem());
+	SecurityHelper::EnablePrivilege(SE_TAKE_OWNERSHIP_NAME, true);
 	if (::GetFocus() == m_List) {
 		auto& item = m_Items[m_List.GetSelectionMark()];
 		ATLASSERT(item.Key);
 		path += L"\\" + item.Name;
-		auto key2 = Registry::OpenKey(path, KEY_READ | (m_ReadOnly ? 0 : KEY_WRITE));
-		key.Attach(key2.Detach());
 	}
-	else {
-		auto key2 = Registry::OpenKey(path, KEY_READ | (m_ReadOnly ? 0 : KEY_WRITE));
-		key.Attach(key2.Detach());
+	auto readonly = m_ReadOnly;
+	auto key = Registry::OpenKey(path, READ_CONTROL | (readonly ? 0 : (WRITE_DAC | WRITE_OWNER)));
+	if (!key && ::GetLastError() == ERROR_ACCESS_DENIED) {
+		key = Registry::OpenKey(path, READ_CONTROL);
+		readonly = true;
 	}
-
+	if (!key && ::GetLastError() == ERROR_ACCESS_DENIED) {
+		key = Registry::OpenKey(path, MAXIMUM_ALLOWED);
+	}
 	if (!key) {
 		DisplayError(L"Failed to open key");
 	}
 	else {
-		CSecurityInformation si((HANDLE)key.m_hKey, path, m_ReadOnly);
+		CSecurityInformation si(key, path, readonly);
 		ThemeHelper::Suspend();
 		::EditSecurity(m_hWnd, &si);
 		ThemeHelper::Resume();
 	}
+	SecurityHelper::EnablePrivilege(SE_TAKE_OWNERSHIP_NAME, false);
 	return 0;
 }
 
@@ -1106,7 +1140,7 @@ LRESULT CMainFrame::OnExport(WORD, WORD, HWND, BOOL&) {
 		if (path.IsEmpty())
 			hKey = Registry::OpenRealRegistryKey();
 		else {
-			auto key = Registry::OpenKey(path, KEY_READ);
+			auto key = Registry::OpenKey(path, KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS);
 			hKey = key.Detach();
 		}
 		if (!hKey)
@@ -1143,7 +1177,7 @@ LRESULT CMainFrame::OnImport(WORD, WORD, HWND, BOOL&) {
 	if (dlg.DoModal() == IDOK) {
 		auto error = ::RegRestoreKey(m_CurrentKey.Get(), dlg.m_szFileName, REG_FORCE_RESTORE);
 		if (ERROR_SUCCESS != error)
-			DisplayError(L"Failed to import file", error);
+			DisplayError(L"Failed to import file", nullptr, error);
 		else {
 			RefreshItem(m_Tree.GetSelectedItem());
 		}
@@ -1167,7 +1201,7 @@ LRESULT CMainFrame::OnLoadHive(WORD, WORD, HWND, BOOL&) {
 		auto hKey = dlg.GetSelectedKey();
 		auto error = ::RegLoadKey(hKey, dlg.GetName(), dlg.GetFileName());
 		if (error != ERROR_SUCCESS)
-			DisplayError(L"Failed to load hive", error);
+			DisplayError(L"Failed to load hive", nullptr, error);
 		else {
 			AtlMessageBox(m_hWnd, L"Hive loaded successfully.", IDS_APP_TITLE, MB_ICONINFORMATION);
 			TreeHelper th(m_Tree);
@@ -1203,8 +1237,8 @@ LRESULT CMainFrame::OnUnloadHive(WORD, WORD, HWND, BOOL&) {
 	m_CurrentKey.Close();
 	auto error = ::RegUnLoadKey(GetKeyFromNode(m_Tree.GetParentItem(hItem)), name);
 	if (error != ERROR_SUCCESS) {
-		DisplayError(L"Failed to unload hive", error);
-		m_CurrentKey.Attach(Registry::OpenKey(GetFullNodePath(hItem), KEY_READ).Detach());
+		DisplayError(L"Failed to unload hive", nullptr, error);
+		m_CurrentKey.Attach(Registry::OpenKey(GetFullNodePath(hItem), KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS).Detach());
 	}
 	else
 		m_Tree.DeleteItem(hItem);
@@ -1224,13 +1258,13 @@ LRESULT CMainFrame::OnReplaceRegEdit(WORD, WORD, HWND, BOOL&) {
 	CRegKey key;
 	auto error = key.Open(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options", KEY_WRITE | KEY_READ);
 	if (!key) {
-		DisplayError(L"Failed to open Image File Execution Options key", error);
+		DisplayError(L"Failed to open Image File Execution Options key", nullptr, error);
 		return 0;
 	}
 	CRegKey regEditKey;
 	error = regEditKey.Create(key, L"regedit.exe", nullptr, 0, KEY_WRITE);
 	if (!regEditKey) {
-		DisplayError(L"Failed to create RegEdit key", error);
+		DisplayError(L"Failed to create RegEdit key", nullptr, error);
 		return 0;
 	}
 	settings.ReplaceRegEdit(!settings.ReplaceRegEdit());
@@ -1243,7 +1277,7 @@ LRESULT CMainFrame::OnReplaceRegEdit(WORD, WORD, HWND, BOOL&) {
 		error = regEditKey.DeleteValue(L"Debugger");
 	}
 	if (ERROR_SUCCESS != error) {
-		DisplayError(L"Failed to replace RegEdit", error);
+		DisplayError(L"Failed to replace RegEdit", nullptr, error);
 	}
 	else {
 		UISetCheck(ID_OPTIONS_REPLACEREGEDIT, settings.ReplaceRegEdit());
@@ -1417,6 +1451,17 @@ LRESULT CMainFrame::OnRestoreDefaultFont(WORD, WORD, HWND, BOOL&) {
 	return 0;
 }
 
+LRESULT CMainFrame::OnShowKeysHandles(WORD, WORD, HWND, BOOL&) {
+	if (!m_HandlesDlg)
+		m_HandlesDlg.Create(nullptr);
+
+	m_HandlesDlg.ShowWindow(SW_SHOW);
+	::SetForegroundWindow(m_HandlesDlg);
+	m_HandlesDlg.Refresh();
+
+	return 0;
+}
+
 LRESULT CMainFrame::OnListEndEdit(int /*idCtrl*/, LPNMHDR pnmh, BOOL& /*bHandled*/) {
 	auto lv = (NMLVDISPINFO*)pnmh;
 	if (lv->item.pszText == nullptr) {
@@ -1443,7 +1488,6 @@ LRESULT CMainFrame::OnListEndEdit(int /*idCtrl*/, LPNMHDR pnmh, BOOL& /*bHandled
 			CString text(lv->item.pszText);
 			if (text.IsEmpty()) {
 				// default value
-				int zz = 9;
 			}
 			auto cb = [this](auto cmd, auto) {
 				if (m_CurrentOperation == Operation::None && cmd.GetPath() == GetFullNodePath(m_Tree.GetSelectedItem())) {
@@ -1499,6 +1543,7 @@ void CMainFrame::InitCommandBar() {
 		{ ID_FILE_RUNASADMIN, 0, IconHelper::GetShieldIcon() },
 		{ ID_EDIT_COPY, IDI_COPY },
 		{ ID_VIEW_REFRESH, IDI_REFRESH },
+		{ ID_EDIT_COPY2, IDI_COPY },
 		{ ID_TREE_REFRESH, IDI_REFRESH },
 		{ ID_EDIT_CUT, IDI_CUT },
 		{ ID_EDIT_PASTE, IDI_PASTE },
@@ -1513,6 +1558,7 @@ void CMainFrame::InitCommandBar() {
 		{ ID_NEW_KEY, IDI_FOLDER_NEW },
 		{ ID_VIEW_SHOWKEYSINLIST, IDI_FOLDER_VIEW },
 		{ ID_KEY_PERMISSIONS, IDI_PERM },
+		{ ID_KEY_PERMISSIONS2, IDI_PERM },
 		{ ID_FILE_EXPORT, IDI_EXPORT },
 		{ ID_FILE_IMPORT, IDI_IMPORT },
 		{ ID_KEY_PROPERTIES, IDI_PROPERTIES },
@@ -1523,6 +1569,7 @@ void CMainFrame::InitCommandBar() {
 		{ ID_NEW_BINARYVALUE, IDI_BINARY },
 		{ ID_NEW_QWORDVALUE, IDI_NUM8 },
 		{ ID_NEW_STRINGVALUE, IDI_TEXT },
+		{ ID_HANDLES_CLOSEHANDLES, IDI_DELETE },
 	};
 	for (auto& cmd : cmds) {
 		if (cmd.icon)
@@ -1591,7 +1638,7 @@ HTREEITEM CMainFrame::BuildTree(HTREEITEM hRoot, HKEY hKey, PCWSTR name) {
 			auto hItem = m_Tree.InsertItem(name, 3, 2, hRoot, TVI_LAST);
 			SetNodeData(hItem, NodeType::Key);
 			CRegKey subKey;
-			auto error = subKey.Open(hKey, name, KEY_READ);
+			auto error = subKey.Open(hKey, name, KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS);
 			if (error == ERROR_SUCCESS) {
 				DWORD subkeys = Registry::GetSubKeyCount(subKey);
 				if (subkeys) {
@@ -1631,7 +1678,7 @@ void CMainFrame::InitTree() {
 	m_hStdReg = m_Tree.InsertItem(L"Standard Registry", 0, 0, m_hLocalRoot, TVI_LAST);
 	SetNodeData(m_hStdReg, NodeType::StandardRoot);
 	m_hRealReg = m_Tree.InsertItem(L"REGISTRY", 11, 11, m_hLocalRoot, TVI_LAST);
-	SetNodeData(m_hRealReg, NodeType::RegistryRoot | NodeType::Predefined);
+	SetNodeData(m_hRealReg, NodeType::RegistryRoot | NodeType::Predefined | NodeType::Key);
 	m_hLocalRoot.Expand(TVE_EXPAND);
 	m_Tree.SelectItem(m_hStdReg);
 }
@@ -1702,7 +1749,7 @@ void CMainFrame::RefreshFull(HTREEITEM hItem) {
 			else {
 				// really expanded
 				RefreshFull(hItem);
-				auto key = Registry::OpenKey(GetFullNodePath(hItem), KEY_READ);
+				auto key = Registry::OpenKey(GetFullNodePath(hItem), KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS);
 				if (key) {
 					auto keys = th.GetChildItems(hItem);
 					Registry::EnumSubKeys(key.Get(), [&](auto name, const auto&) {
@@ -1734,7 +1781,7 @@ void CMainFrame::RefreshFull(HTREEITEM hItem) {
 		}
 		else if (m_Tree.GetChildItem(hItem) == nullptr && (GetNodeData(hItem) & NodeType::AccessDenied) == NodeType::None) {
 			// no children - check if new exist
-			auto key = Registry::OpenKey(GetFullNodePath(hItem), KEY_READ);
+			auto key = Registry::OpenKey(GetFullNodePath(hItem), KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS);
 			if (Registry::GetSubKeyCount(key.Get()) > 0) {
 				m_Tree.InsertItem(L"\\\\", hItem, TVI_LAST);
 				TVITEM tvi;
@@ -1763,10 +1810,11 @@ HKEY CMainFrame::GetKeyFromNode(HTREEITEM hItem) const {
 }
 
 CTreeItem CMainFrame::InsertKeyItem(HTREEITEM hParent, PCWSTR name, NodeType type) {
-	auto item = m_Tree.InsertItem(name, 3, 2, hParent, TVI_LAST);
+	bool accessDenied = (type & NodeType::AccessDenied) == NodeType::AccessDenied;
+	auto item = m_Tree.InsertItem(name, accessDenied ? 5 : 3, accessDenied ? 5 : 2, hParent, TVI_LAST);
 	SetNodeData(item, type);
 	if ((type & NodeType::Key) == NodeType::Key) {
-		auto key = Registry::OpenKey(GetFullNodePath(item), KEY_READ);
+		auto key = Registry::OpenKey(GetFullNodePath(item), KEY_QUERY_VALUE);
 		if (key) {
 			if (Registry::GetSubKeyCount(key.Get()) > 0)
 				m_Tree.InsertItem(L"\\\\", item, TVI_LAST);
@@ -1868,23 +1916,14 @@ bool CMainFrame::RefreshItem(HTREEITEM hItem) {
 	return true;
 }
 
-void CMainFrame::DisplayError(PCWSTR msg, DWORD error) const {
+void CMainFrame::DisplayError(PCWSTR msg, HWND hWnd, DWORD error) const {
 	CString text;
-	text.Format(L"%s (%s)", msg, (PCWSTR)GetErrorText(error));
-	AtlMessageBox(m_hWnd, (PCWSTR)text, IDS_APP_TITLE, MB_ICONERROR);
+	text.Format(L"%s (%s)", msg, (PCWSTR)Helpers::GetErrorText(error));
+	AtlMessageBox(hWnd ? hWnd : m_hWnd, (PCWSTR)text, IDS_APP_TITLE, MB_ICONERROR);
 }
 
-CString CMainFrame::GetErrorText(DWORD error) {
-	ATLASSERT(error);
-	PWSTR buffer;
-	CString msg;
-	if (::FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-		nullptr, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPTSTR)&buffer, 0, nullptr)) {
-		msg = buffer;
-		::LocalFree(buffer);
-		msg.Trim(L"\n\r");
-	}
-	return msg;
+bool CMainFrame::AddMenu(HMENU hMenu) {
+	return false;
 }
 
 int CMainFrame::GetKeyImage(const RegistryItem& item) const {
@@ -1897,7 +1936,7 @@ int CMainFrame::GetKeyImage(const RegistryItem& item) const {
 		return 4;
 
 	RegistryKey key;
-	auto error = key.Open(m_CurrentKey.Get(), item.Name, KEY_READ);
+	auto error = key.Open(m_CurrentKey.Get(), item.Name, READ_CONTROL);
 	if (Registry::IsHiveKey(GetFullNodePath(m_Tree.GetSelectedItem()) + L"\\" + item.Name))
 		image = error == ERROR_ACCESS_DENIED ? 7 : 6;
 	else if (error == ERROR_ACCESS_DENIED)
@@ -2040,30 +2079,26 @@ void CMainFrame::SetDarkMode(bool dark) {
 	for (UINT i = 0; i < rb.GetBandCount(); i++) {
 		if (rb.GetBandInfo(i, &rbi)) {
 			ATLASSERT(rbi.hwndChild);
-			::SetWindowTheme(rbi.hwndChild, dark ? L" " : nullptr, dark ? L"" : nullptr);
-			rbi.clrBack = RGB(32, 32, 32);
-			rbi.clrFore = RGB(240, 240, 240);
+			rbi.clrBack = dark ? RGB(32, 32, 32) : ::GetSysColor(COLOR_MENU);
+			rbi.clrFore = dark ? RGB(240, 240, 240) : ::GetSysColor(COLOR_WINDOWTEXT);
 			rb.SetBandInfo(i, &rbi);
 		}
 	}
 
-	RedrawWindow(nullptr, nullptr, RDW_ERASENOW | RDW_INTERNALPAINT | RDW_INVALIDATE | RDW_ALLCHILDREN);
+	::EnumThreadWindows(::GetCurrentThreadId(), [](auto h, auto) {
+		::RedrawWindow(h, nullptr, nullptr, RDW_ERASENOW | RDW_INTERNALPAINT | RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+		return TRUE;
+		}, 0);
 
-	//
-	// customize menu colors
-	//
-	m_Menu.SetBackColor(theme.Menu.BackColor);
-	m_Menu.SetTextColor(theme.Menu.TextColor);
-	m_Menu.SetSelectionTextColor(dark ? RGB(240, 240, 240) : RGB(248, 248, 248));
-	m_Menu.SetSelectionBackColor(dark ? RGB(0, 64, 240) : RGB(0, 48, 160));
-	m_Menu.SetSeparatorColor(dark ? RGB(160, 160, 160) : RGB(64, 64, 64));
+	SetStatusText(m_StatusText);
+	ThemeHelper::UpdateMenuColors(m_Menu, dark);
 	m_Menu.UpdateMenu(GetMenu(), true);
 	DrawMenuBar();
 
 	m_StatusBar.SetBkColor(theme.BackColor);
 }
 
-HTREEITEM CMainFrame::GotoKey(const CString& path) {
+HTREEITEM CMainFrame::GotoKey(const CString& path, bool knownToExist) {
 	CString spath(path);
 	spath.MakeUpper();
 	if (spath != L'\\') {
@@ -2076,6 +2111,11 @@ HTREEITEM CMainFrame::GotoKey(const CString& path) {
 		spath.Replace(L"HKCC\\", L"HKEY_CURRENT_CONFIG");
 	}
 	auto hItem = TreeHelper(m_Tree).FindItem(spath[0] == L'\\' ? m_hRealReg : m_hStdReg, spath);
+	if (!hItem || knownToExist) {
+		auto key = Registry::OpenKey(path, KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE);
+		hItem = BuildKeyPath(path, key.Get() != nullptr);
+	}
+
 	if (hItem) {
 		m_Tree.SelectItem(hItem);
 		m_Tree.EnsureVisible(hItem);
@@ -2093,11 +2133,11 @@ void CMainFrame::ShowBand(int index, bool show) {
 void CMainFrame::InitDarkTheme() {
 	m_DarkTheme.BackColor = m_DarkTheme.SysColors[COLOR_WINDOW] = RGB(32, 32, 32);
 	m_DarkTheme.TextColor = m_DarkTheme.SysColors[COLOR_WINDOWTEXT] = RGB(248, 248, 248);
-	m_DarkTheme.SysColors[COLOR_HIGHLIGHT] = RGB(0, 0, 248);
+	m_DarkTheme.SysColors[COLOR_HIGHLIGHT] = RGB(32, 32, 255);
 	m_DarkTheme.SysColors[COLOR_HIGHLIGHTTEXT] = RGB(240, 240, 240);
 	m_DarkTheme.SysColors[COLOR_MENUTEXT] = m_DarkTheme.TextColor;
 	m_DarkTheme.SysColors[COLOR_CAPTIONTEXT] = m_DarkTheme.TextColor;
-	m_DarkTheme.SysColors[COLOR_BTNFACE] = m_DarkTheme.BackColor;
+	m_DarkTheme.SysColors[COLOR_BTNFACE] = RGB(16, 16, 96);
 	m_DarkTheme.SysColors[COLOR_BTNTEXT] = m_DarkTheme.TextColor;
 	m_DarkTheme.SysColors[COLOR_3DLIGHT] = RGB(192, 192, 192);
 	m_DarkTheme.SysColors[COLOR_BTNHIGHLIGHT] = RGB(192, 192, 192);
@@ -2110,7 +2150,7 @@ void CMainFrame::InitDarkTheme() {
 
 void CMainFrame::InitLocations() {
 	CMenuHandle menu = GetMenu();
-	menu = menu.GetSubMenu(6);
+	menu = menu.GetSubMenu(5);
 	while (menu.DeleteMenu(2, MF_BYPOSITION))
 		;
 
@@ -2163,6 +2203,23 @@ void CMainFrame::InitLocations() {
 	for (auto& r : replace)
 		m_Locations.Replace(r.first, r.second);
 }
+
+HTREEITEM CMainFrame::BuildKeyPath(const CString& path, bool accessible) {
+	auto hItem = path[0] == L'\\' ? m_hRealReg : m_hStdReg;
+	CString name;
+	int start = path[0] == L'\\' ? 10 : 0;
+	TreeHelper th(m_Tree);
+	while (!(name = path.Tokenize(L"\\", start)).IsEmpty()) {
+		auto hChild = th.FindChild(hItem, name);
+		if (hChild) {
+			hItem = hChild;
+			continue;
+		}
+		hItem = InsertKeyItem(hItem, name, NodeType::Key | (accessible ? NodeType::None : NodeType::AccessDenied));
+	}
+	return hItem;
+}
+
 
 AppCommandCallback<DeleteKeyCommand> CMainFrame::GetDeleteKeyCommandCallback() {
 	static const auto cb = [this](auto& cmd, bool execute) {
@@ -2241,7 +2298,7 @@ void CMainFrame::UpdateList(bool force) {
 	m_CurrentPath = GetFullNodePath(hItem);
 	auto& path = m_CurrentPath;
 
-	m_StatusBar.SetText((int)StatusPane::Key, path, SBT_NOBORDERS);
+	SetStatusText(path);
 
 	m_AddressBar.SetWindowText(path);
 	int image;
@@ -2266,7 +2323,7 @@ void CMainFrame::UpdateList(bool force) {
 			item.Name = name;
 			if (m_CurrentPath[0] == L'\\')
 				name = m_CurrentPath + L"\\" + name;
-			auto key = Registry::OpenKey(name, KEY_READ);
+			auto key = Registry::OpenKey(name, KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS);
 			if (key) {
 				Registry::GetSubKeyCount(key.Get(), nullptr, &item.TimeStamp);
 			}
@@ -2321,7 +2378,7 @@ void CMainFrame::UpdateList(bool force) {
 
 	auto parentPath = GetFullParentNodePath(hItem);
 	if (!parentPath.IsEmpty()) {
-		auto temp = Registry::OpenKey(parentPath, KEY_READ);
+		auto temp = Registry::OpenKey(parentPath, KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS);
 		if (temp) {
 			CString name, linkPath;
 			m_Tree.GetItemText(hItem, name);
